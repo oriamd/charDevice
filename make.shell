@@ -1,0 +1,6 @@
+sudo rmmod tapedriver
+sudo rm /dev/TAPE_DEVICE
+make
+sudo insmod tapedriver.ko
+sudo mknod /dev/TAPE_DEVICE c 246 0
+sudo chmod 777 /dev/TAPE_DEVICE
