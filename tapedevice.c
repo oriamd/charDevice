@@ -31,8 +31,8 @@ char dataStorage[DATA_MAX_SIZE];
 int currtape = 0;
 //Names of all tape files
 char tapeFilesNames[NUM_OF_TAPES][20] = {
-        "tape1.txt","tape2.txt","tape3.txt","tape4.txt","tape5.txt","tape6.txt","tape7.txt","tape8.txt"
-        "tape9.txt","tape10.txt"
+        "tapes/tape0.txt","tapes/tape1.txt","tapes/tape2.txt","tapes/tape3.txt","tapes/tape4.txt","tapes/tape5.txt","tapes/tape6.txt","tapes/tape7.txt",
+        "tapes/tape8.txt","tapes/tape9.txt"
 };
 
 int writeTape(char* data,int len);
@@ -52,18 +52,16 @@ int main()
     bind(sock_fd, (struct sockaddr*)&src_addr, sizeof(src_addr));
 
     memset(&dest_addr, 0, sizeof(dest_addr));
-    memset(&dest_addr, 0, sizeof(dest_addr));
     dest_addr.nl_family = AF_NETLINK;
     dest_addr.nl_pid = 0; /* For Linux Kernel */
     dest_addr.nl_groups = 0; /* unicast */
 
-    nlh = (struct nlmsghdr *)malloc(NLMSG_SPACE(MAX_PAYLOAD));
+     nlh = (struct nlmsghdr *)malloc(NLMSG_SPACE(MAX_PAYLOAD));
     memset(nlh, 0, NLMSG_SPACE(MAX_PAYLOAD));
     nlh->nlmsg_len = NLMSG_SPACE(MAX_PAYLOAD);
     nlh->nlmsg_pid = getpid();
     nlh->nlmsg_flags = 0;
 
-    //First getting data from tape
     readTape();
     strcpy(NLMSG_DATA(nlh), dataStorage);
 
@@ -82,6 +80,7 @@ int main()
     /* Read message from kernel */
     recvmsg(sock_fd, &msg, 0);
     printf("tapedevice : Received message payload: %s\n", (char *)NLMSG_DATA(nlh));
+
     while(1){
         printf("tapedevice : Waiting for kernel command ... \n");
         /* Waiting for instructions from kernel */
@@ -89,22 +88,34 @@ int main()
 //        printf("tapedevice : Received message payload: %s\n", (char *)NLMSG_DATA(nlh));
         switch (mapMsg((char *)NLMSG_DATA(nlh))){
             case 1://Need to write In data to tape (The driver already have the new data)
-                printf("tapedevice : Receved Write msg from kernel\n");
+                printf("tapedevice : Receved [Write] msg from kernel\n");
                 writeTape((char *)NLMSG_DATA(nlh),NLMSG_PAYLOAD(nlh, 0));
                 break;
-            case 2://Need to change the current tape, then sends it's data to kernel
-                printf("tapedevice : changing to tape %s",(char *)NLMSG_DATA(nlh)+CHANGE_TAPE_PROTOCOL_SIZE);
+            case 2:
+                printf("tapedevice : Receved [Change tape] msg from kernel\n");
+                //Updating current tape
+                currtape = (int)(((char *)NLMSG_DATA(nlh))[CHANGE_TAPE_PROTOCOL_SIZE]-'0');
+                //Caching the tape
+                readTape();
+                //LINUX CRASH HERE
+                //*************************************************************************
+                strcpy(NLMSG_DATA(nlh), dataStorage);
+                sendmsg(sock_fd,&msg,0);
+                //*************************************************************************
+                printf("tapedevice : changed tape to %s\n",tapeFilesNames[currtape]);
                 break;
         }
 
     }
+
     close(sock_fd);
 }
 
 //writing data to current tape
 int writeTape(char* data,int len){
-    int* fd = open(tapeFilesNames[currtape], O_WRONLY|O_CREAT|O_TRUNC,S_IRWXU|S_IRWXG|S_IRWXO);
+    int fd = open(tapeFilesNames[currtape], O_WRONLY|O_CREAT|O_TRUNC,S_IRWXU|S_IRWXG|S_IRWXO);
     int numOfBytes;
+
     if(fd == NULL){
         printf("tapedevice::writeTape : could not open file for write\n");
         return -1;
@@ -120,8 +131,9 @@ int writeTape(char* data,int len){
 int readTape(){
     int fd = open(tapeFilesNames[currtape], O_RDONLY|O_CREAT,S_IRWXU|S_IRWXG|S_IRWXO );
     int numOfBytes;
+
     if(fd < 0 ){
-        printf("tapedevice::readTape : could not open file for read\n");
+        perror("tapedevice::readTape :  read file ernno : ");
         return -1;
     }
     if((numOfBytes = read(fd,dataStorage,DATA_MAX_SIZE))>=0){
@@ -148,50 +160,3 @@ int mapMsg(char* msg){
 
 }
 
-/*
-
-
-int readTape(){
-    char buff[100];
-    FILE* fd = fopen(tapeFilesNames[currtape],"r");
-    if(fd == NULL){
-        printf("tapedevice: writeTape could not open file for read\n");
-        return -1;
-    }
-    while(fgets(buff, 100, fd)!=NULL){
-        puts(buff);
-    }
-
-    fclose(fd);
-    return 0;
-}
-
-int writeTape(char* data){
-    FILE* fd = fopen(tapeFilesNames[currtape],"w");
-    if(fd == NULL){
-        printf("tapedevice: readTape could not open file for write\n");
-        return -1;
-    }
-    if(fputs(data, fd)>=0){
-        printf("tapedevice: writeTape wrote to %s successfully\n",tapeFilesNames[currtape]);
-    }
-
-    return 0;
-}
-
-int main(int argc,char* argv[]){
-    if(argc < 2){
-        printf("tapedevice: Wrong arguments\n");
-        return 0;
-    }
-    if(!strcmp(argv[1],"read")){
-        readTape();
-    }else if(!strcmp(argv[1],"write") && argc>2){
-        writeTape(argv[2]);
-    }else{
-        printf("tapedevice: Wrong arguments\n");
-    }
-    return 0;
-}
-
-*/
