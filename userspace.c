@@ -16,22 +16,27 @@ int main(int argc,char* argv[]){
         puts("userspace : could not open file\n");
         return -1;
     }
+    //Case user wants to read from current tape
     if(!strcmp(argv[1],"read")){
         if(read(fd,buff,100)<0)
             perror("userspace read errno : ");
         printf("%s\n",buff);
+    //Chase user wants to write to current tape
     }else if(!strcmp(argv[1],"write") && argc>2 ){
         if(write(fd,argv[2],strlen(argv[2]))<0);
             perror("userspace write errno : ");
+    //Case user wants to Change tape
     }else if(!strcmp(argv[1],"change") && argc>2){
-        printf("igothrer\n");
-        dummy = atoi(argv[2]);
-        printf("%d\n",dummy);
-        if(ioctl(fd, IOCTL_CHANGE_TAPE, dummy)<0) {
+        strcpy(buff,argv[2]);
+        if(buff[0] > '9' || buff[0] < '0' || strlen(argv[2])>1 ){
+            printf("- No such commend found. \n- Try : read, write [string] , change [number 0 - 9]\n");
+        }
+        if(ioctl(fd, IOCTL_CHANGE_TAPE, buff)<0) {
             perror("userspace write errno : ");
         }
+
     }else{
-        printf("- No such commend found. \n- Try : read, write [string arg] , change [int arg]\n");
+        printf("- No such commend found. \n- Try : read, write [string] , change [number 0 - 9]\n");
     }
     return 0;
 }

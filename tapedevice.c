@@ -21,10 +21,10 @@
 
 #define MAX_PAYLOAD 1024 /* maximum payload size*/
 struct sockaddr_nl src_addr, dest_addr;
-struct nlmsghdr *nlh = NULL;
-struct iovec iov;
+struct nlmsghdr *nlh = NULL, *nlh_in = NULL;
+struct iovec iov,iov_in;
 int sock_fd;
-struct msghdr msg;
+struct msghdr msg,msg_in;
 
 char dataStorage[DATA_MAX_SIZE];
 //Current active tape
@@ -40,7 +40,10 @@ int readTape();
 
 int main()
 {
+    //init current tape to 0
     currtape = 0;
+
+    //Setting up NetLink connection
     sock_fd=socket(PF_NETLINK, SOCK_RAW, NETLINK_USER);
     if(sock_fd<0)
         return -1;
@@ -56,7 +59,7 @@ int main()
     dest_addr.nl_pid = 0; /* For Linux Kernel */
     dest_addr.nl_groups = 0; /* unicast */
 
-     nlh = (struct nlmsghdr *)malloc(NLMSG_SPACE(MAX_PAYLOAD));
+    nlh = (struct nlmsghdr *)malloc(NLMSG_SPACE(MAX_PAYLOAD));
     memset(nlh, 0, NLMSG_SPACE(MAX_PAYLOAD));
     nlh->nlmsg_len = NLMSG_SPACE(MAX_PAYLOAD);
     nlh->nlmsg_pid = getpid();
@@ -72,50 +75,73 @@ int main()
     msg.msg_iov = &iov;
     msg.msg_iovlen = 1;
 
+    /* receiver parameters */
+    nlh_in = (struct nlmsghdr *)malloc(NLMSG_SPACE(MAX_PAYLOAD));
+    iov_in.iov_base = (void *)nlh_in;
+    iov_in.iov_len = nlh->nlmsg_len;
+    msg_in.msg_iov = &iov_in;
+    msg_in.msg_iovlen = 1;
+
     //Now sending kernel data to init his cache
     printf("tapedevice : Sending data to kernel\n");
     sendmsg(sock_fd,&msg,0);
-    //Waiting for kernel to say hello and confirm receving init data
-    printf("tapedevice : Waiting for kernel to say Hello \n");
-    /* Read message from kernel */
-    recvmsg(sock_fd, &msg, 0);
-    printf("tapedevice : Received message payload: %s\n", (char *)NLMSG_DATA(nlh));
 
+
+    //Entering Commads loop
+    char *inData;
     while(1){
         printf("tapedevice : Waiting for kernel command ... \n");
         /* Waiting for instructions from kernel */
-        recvmsg(sock_fd, &msg, 0);
-//        printf("tapedevice : Received message payload: %s\n", (char *)NLMSG_DATA(nlh));
-        switch (mapMsg((char *)NLMSG_DATA(nlh))){
-            case 1://Need to write In data to tape (The driver already have the new data)
+        recvmsg(sock_fd, &msg_in, 0);
+
+        //We got intruction
+        inData = (char *)NLMSG_DATA(nlh_in);
+        printf("tapedevice : Received message payload: %s \n", inData);
+
+        //Need to see which type of command is it and execute it
+        switch (mapMsg(inData)){
+
+            case 1://Need to write In data to tape (The driver already have the new data cached)
                 printf("tapedevice : Receved [Write] msg from kernel\n");
-                writeTape((char *)NLMSG_DATA(nlh),NLMSG_PAYLOAD(nlh, 0));
+                writeTape(inData,strlen(inData));
                 break;
-            case 2:
+
+            case 2://Need to change the current tape, and send the current tape data to driver for caching
                 printf("tapedevice : Receved [Change tape] msg from kernel\n");
                 //Updating current tape
-                currtape = (int)(((char *)NLMSG_DATA(nlh))[CHANGE_TAPE_PROTOCOL_SIZE]-'0');
-                //Caching the tape
+                currtape = (int)((inData)[CHANGE_TAPE_PROTOCOL_SIZE]-'0');
+                //Getting data from file and Sending Data to driver for caching
+                nlh = (struct nlmsghdr *)malloc(NLMSG_SPACE(MAX_PAYLOAD));
+                memset(nlh, 0, NLMSG_SPACE(MAX_PAYLOAD));
+                nlh->nlmsg_len = NLMSG_SPACE(MAX_PAYLOAD);
+                nlh->nlmsg_pid = getpid();
+                nlh->nlmsg_flags = 0;
+
                 readTape();
-                //LINUX CRASH HERE
-                //*************************************************************************
                 strcpy(NLMSG_DATA(nlh), dataStorage);
-                sendmsg(sock_fd,&msg,0);
-                //*************************************************************************
+
+                iov.iov_base = (void *)nlh;
+                iov.iov_len = nlh->nlmsg_len;
+                msg.msg_name = (void *)&dest_addr;
+                msg.msg_namelen = sizeof(dest_addr);
+                msg.msg_iov = &iov;
+                msg.msg_iovlen = 1;
+
+                sendmsg(sock_fd, &msg, 0);
+
                 printf("tapedevice : changed tape to %s\n",tapeFilesNames[currtape]);
                 break;
         }
 
     }
-
     close(sock_fd);
 }
 
 //writing data to current tape
 int writeTape(char* data,int len){
+
     int fd = open(tapeFilesNames[currtape], O_WRONLY|O_CREAT|O_TRUNC,S_IRWXU|S_IRWXG|S_IRWXO);
     int numOfBytes;
-
     if(fd == NULL){
         printf("tapedevice::writeTape : could not open file for write\n");
         return -1;
@@ -127,16 +153,16 @@ int writeTape(char* data,int len){
     return 0;
 }
 
-//reading tape to in Msg
+//reading tape and storing it in dataStorage
 int readTape(){
     int fd = open(tapeFilesNames[currtape], O_RDONLY|O_CREAT,S_IRWXU|S_IRWXG|S_IRWXO );
     int numOfBytes;
-
     if(fd < 0 ){
         perror("tapedevice::readTape :  read file ernno : ");
         return -1;
     }
     if((numOfBytes = read(fd,dataStorage,DATA_MAX_SIZE))>=0){
+        dataStorage[numOfBytes] = '\0';
         printf("tapedevice::readTape : successfully read %d bytes from %s\n",numOfBytes,tapeFilesNames[currtape]);
     }else{
         printf("tapedevice::readTape : could not read from file\n");
@@ -149,7 +175,7 @@ int readTape(){
 }
 
 
-//Maps the msg tile to index
+//Maps the msg to index
 int mapMsg(char* msg){
 
     if(!strncmp(msg,CHANGE_TAPE_PROTOCOL,CHANGE_TAPE_PROTOCOL_SIZE)){
@@ -159,4 +185,3 @@ int mapMsg(char* msg){
     }
 
 }
-
